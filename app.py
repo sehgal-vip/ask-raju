@@ -121,6 +121,22 @@ def inject_global_css():
         .raju-logo { color: #38bdf8; font-size: 1.45em; line-height: 1; }
         .raju-logo--pulsing { animation: raju-pulse 1.4s ease-in-out infinite; }
         @keyframes raju-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+        /* Animated dots for the "thinking" placeholder — three dots fade
+           in one at a time so the user sees the page is alive */
+        .raju-dots { display: inline-block; width: 1.4em; text-align: left; }
+        .raju-dots span {
+          opacity: 0;
+          animation: raju-dots-blink 1.4s infinite;
+          font-weight: 700;
+        }
+        .raju-dots span:nth-child(1) { animation-delay: 0s; }
+        .raju-dots span:nth-child(2) { animation-delay: 0.25s; }
+        .raju-dots span:nth-child(3) { animation-delay: 0.5s; }
+        @keyframes raju-dots-blink {
+          0%, 60%, 100% { opacity: 0; }
+          30% { opacity: 1; }
+        }
         .raju-wordmark { font-weight: 800; font-size: 1.15em; letter-spacing: -0.02em; color: #f8fafc; }
 
         /* Nav chips inside the brand bar */
@@ -161,6 +177,53 @@ def inject_global_css():
         .raju-page-hero { padding: 4px 0 20px 0; }
         .raju-page-hero h2 { font-size: 1.7em; }
         .raju-page-hero p { opacity: 0.7; margin: 4px 0 0 0; font-size: 1em; }
+
+        /* ------- Objective doc page ------- */
+        .raju-meta-strip {
+          display: flex; flex-wrap: wrap; gap: 8px;
+          margin: 0 0 24px 0; padding-bottom: 18px;
+          border-bottom: 1px solid rgba(127,127,127,0.15);
+        }
+        .raju-meta-chip {
+          display: inline-flex; align-items: center; gap: 6px;
+          padding: 5px 12px; border-radius: 999px;
+          background: rgba(127,127,127,0.06);
+          border: 1px solid rgba(127,127,127,0.18);
+          font-size: 0.82em;
+        }
+        .raju-meta-chip b {
+          font-weight: 700; opacity: 0.55;
+          text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.85em;
+        }
+        .raju-doc {
+          max-width: 760px; font-size: 1.02em; line-height: 1.7;
+        }
+        .raju-doc h2 {
+          font-size: 1.55em; font-weight: 700;
+          margin: 36px 0 12px 0; padding-top: 14px;
+          border-top: 1px solid rgba(127,127,127,0.12);
+        }
+        .raju-doc h2:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+        .raju-doc h3 { font-size: 1.18em; font-weight: 700; margin: 24px 0 8px 0; }
+        .raju-doc p { margin: 8px 0 14px 0; }
+        .raju-doc ul, .raju-doc ol { padding-left: 1.4em; margin: 8px 0 16px 0; }
+        .raju-doc li { margin: 4px 0; }
+        .raju-doc strong { font-weight: 700; color: #0f172a; }
+        .raju-doc code {
+          background: rgba(127,127,127,0.08);
+          padding: 1px 6px; border-radius: 4px;
+          font-size: 0.88em;
+        }
+        .raju-doc blockquote {
+          border-left: 3px solid #2563eb;
+          padding: 4px 14px; margin: 14px 0;
+          background: rgba(37,99,235,0.05);
+          opacity: 0.85; font-style: italic;
+        }
+        .raju-doc hr {
+          border: none; border-top: 1px solid rgba(127,127,127,0.15);
+          margin: 28px 0;
+        }
 
         /* ------- Chat bubble (Raju's response area) ------- */
         .raju-bubble {
@@ -281,7 +344,7 @@ def get_memory_stats() -> dict:
     }
 
 
-NAV_ITEMS = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Home", "✦")]
+NAV_ITEMS = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Objective", "🎯"), ("Home", "✦")]
 
 
 def render_brand_bar(current_page: str = ""):
@@ -309,7 +372,7 @@ def render_brand_bar(current_page: str = ""):
 
 
 # ---------- LLM model IDs ----------
-MODEL_HIGH_STAKES = "z-ai/glm4.7"                   # synthesis (GLM 4.7 thinking OFF: 0.76s TTFT, 88 TPS — fastest measured)
+MODEL_HIGH_STAKES = "meta/llama-3.3-70b-instruct"   # synthesis (llama emits content directly, no reasoning detour, <1s TTFT)
 MODEL_CHEAP = "deepseek-ai/deepseek-v4-flash"       # extraction, conflict-check
 MODEL_LONG_CONTEXT = "minimax/minimax-2.7"          # optional fallback for long content (may not exist on NIM)
 
@@ -1559,10 +1622,10 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
     system_prompt, user_prompt = _build_synthesis_prompts(query, records)
     chosen_model = model or MODEL_CHEAP
 
-    # Synthesis runs without explicit thinking — the grounding contract is in the
-    # prompt; reasoning mode causes the model to dump output into reasoning_content
-    # and emit nothing in content, breaking streaming.
-    stream = nv.chat.completions.create(
+    # Reasoning-capable models (GLM, DeepSeek) need explicit thinking=False so
+    # they emit content directly. Non-reasoning models (Llama, Mistral) reject
+    # the param, so we omit it for them.
+    create_kwargs: dict = dict(
         model=chosen_model,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -1571,8 +1634,10 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
         temperature=0,
         max_tokens=2048,
         stream=True,
-        extra_body={"chat_template_kwargs": {"thinking": False}},
     )
+    if chosen_model.startswith(("z-ai/", "deepseek-ai/", "qwen/")):
+        create_kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
+    stream = nv.chat.completions.create(**create_kwargs)
 
     # Three-state machine:
     #   REASONING — buffering, yielding nothing (the model's scratchpad is invisible)
@@ -1640,7 +1705,7 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
     # streaming dropped), do a non-streaming retry and extract the answer block.
     if not final_answer:
         try:
-            non_stream = nv.chat.completions.create(
+            ns_kwargs: dict = dict(
                 model=chosen_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -1648,8 +1713,10 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
                 ],
                 temperature=0,
                 max_tokens=2048,
-                extra_body={"chat_template_kwargs": {"thinking": False}},
             )
+            if chosen_model.startswith(("z-ai/", "deepseek-ai/", "qwen/")):
+                ns_kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
+            non_stream = nv.chat.completions.create(**ns_kwargs)
             full2 = non_stream.choices[0].message.content or ""
             # Try marker extraction first
             if ANSWER_START in full2 and ANSWER_END in full2:
@@ -1899,8 +1966,10 @@ def page_query():
         bubble_slot = st.empty()
         bubble_slot.markdown(
             bubble_html_open
-            + '<p style="opacity:0.55; font-style: italic;">'
-              'Cross-checking sources. Refusing to make stuff up…</p>'
+            + '<p style="opacity:0.65; font-style: italic;">'
+              'Cross-checking sources. Refusing to make stuff up'
+              '<span class="raju-dots"><span>.</span><span>.</span><span>.</span></span>'
+              '</p>'
             + bubble_html_close,
             unsafe_allow_html=True,
         )
@@ -2085,10 +2154,57 @@ def render_comparison_charts():
     )
 
 
+def page_objective():
+    render_brand_bar("Objective")
+    st.markdown(
+        """
+        <div class="raju-page-hero">
+          <h2>Why Ask Raju exists.</h2>
+          <p>The hackathon objective — what we're building, why, and what counts as a win.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    try:
+        raw = Path("objective_hackathon.md").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        st.error("objective_hackathon.md not found in the project root.")
+        return
+
+    # Strip the H1 (we already render a hero) and the metadata block before "## Why I'm doing this hackathon"
+    lines = raw.splitlines()
+    body_start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            body_start = i
+            break
+    body = "\n".join(lines[body_start:]) if body_start else raw
+
+    # Pull the metadata header (Status / Author / Date / etc.) into a chip strip
+    meta = {}
+    for line in lines[:body_start]:
+        if line.startswith("**") and ":**" in line:
+            k, _, v = line.partition(":**")
+            meta[k.strip("* ").strip()] = v.strip().strip("*").strip()
+
+    if meta:
+        chips_html = "".join(
+            f'<span class="raju-meta-chip"><b>{k}</b> {v}</span>'
+            for k, v in meta.items()
+            if k in ("Status", "Author", "Date", "Time budget", "Builder")
+        )
+        st.markdown(f'<div class="raju-meta-strip">{chips_html}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="raju-doc">', unsafe_allow_html=True)
+    st.markdown(body)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 # ---------- Main app routing ----------
 # Sidebar is hidden via global CSS. Nav lives in the brand bar (chip-style anchors
 # routed via ?nav=X query params), plus internal redirects via session_state["nav"].
-NAV_OPTIONS = ["Query", "Browse", "Capture", "Home"]
+NAV_OPTIONS = ["Query", "Browse", "Capture", "Objective", "Home"]
 qp_nav = st.query_params.get("nav")
 ss_nav = st.session_state.pop("nav", None)
 current_page = ss_nav or qp_nav or "Query"
@@ -2104,5 +2220,7 @@ elif current_page == "Browse":
     page_browse()
 elif current_page == "Capture":
     page_capture()
+elif current_page == "Objective":
+    page_objective()
 elif current_page == "Home":
     page_home()
