@@ -2196,9 +2196,11 @@ def page_objective():
         )
         st.markdown(f'<div class="raju-meta-strip">{chips_html}</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="raju-doc">', unsafe_allow_html=True)
-    st.markdown(body)
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Render markdown→HTML in one call so the .raju-doc wrapper actually contains the content
+    st.markdown(
+        f'<div class="raju-doc">{_MD.render(body)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ---------- Main app routing ----------
