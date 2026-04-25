@@ -17,8 +17,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import streamlit as st
+from markdown_it import MarkdownIt
 from openai import OpenAI
 from supabase import Client, create_client
+
+_MD = MarkdownIt("commonmark", {"breaks": True, "html": False})
 
 # ---------- Page config ----------
 st.set_page_config(page_title="Ask Raju", page_icon="◆", layout="wide")
@@ -172,6 +175,26 @@ def inject_global_css():
         .raju-bubble-name { font-weight: 700; font-size: 0.98em; }
         .raju-bubble-meta { opacity: 0.55; font-size: 0.82em; margin-left: auto; }
 
+        /* The streamed answer area — make the first paragraph (verdict) prominent */
+        .raju-answer { padding: 4px 0 0 0; }
+        .raju-answer > p:first-of-type {
+          font-size: 1.18em; line-height: 1.55; font-weight: 600;
+          padding: 14px 18px; margin: 0 0 16px 0;
+          background: rgba(37,99,235,0.06);
+          border-left: 4px solid #2563eb;
+          border-radius: 6px;
+        }
+        .raju-answer > p:first-of-type strong {
+          font-weight: 700;
+        }
+        .raju-answer p, .raju-answer li { font-size: 0.97em; line-height: 1.65; }
+        .raju-answer ul { padding-left: 1.2em; margin: 6px 0 14px 0; }
+        .raju-answer h2, .raju-answer h3,
+        .raju-answer p strong:first-child {
+          font-size: 0.78em; text-transform: uppercase;
+          letter-spacing: 0.08em; opacity: 0.7;
+        }
+
         /* User question pill above the bubble */
         .raju-you-asked {
           display: inline-flex; align-items: center; gap: 10px;
@@ -294,9 +317,9 @@ def render_nav(current_page: str):
 
 
 # ---------- LLM model IDs ----------
-MODEL_HIGH_STAKES = "deepseek-ai/deepseek-v4-pro"   # synthesis + extraction
-MODEL_CHEAP = "deepseek-ai/deepseek-v4-flash"       # conflict-check, lightweight extraction
-MODEL_LONG_CONTEXT = "minimax/minimax-2.7"          # optional fallback for long content
+MODEL_HIGH_STAKES = "z-ai/glm4.7"                   # synthesis (GLM 4.7 thinking OFF: 0.76s TTFT, 88 TPS — fastest measured)
+MODEL_CHEAP = "deepseek-ai/deepseek-v4-flash"       # extraction, conflict-check
+MODEL_LONG_CONTEXT = "minimax/minimax-2.7"          # optional fallback for long content (may not exist on NIM)
 
 
 # ---------- LLM helpers ----------
@@ -1466,18 +1489,39 @@ def _build_synthesis_prompts(query: str, records: dict) -> tuple[str, str]:
 
 1. Every factual claim in your answer MUST cite at least one record by ID using the format [r:RECORD_ID]. The IDs are exactly as shown in the records (e.g. [r:abc123-def4-...]).
 2. Never make claims that are not supported by the provided records. If you can't ground a claim, OMIT it.
-3. If the records cannot support an answer to the user's question, say "I don't have data on this in my memory" — do NOT speculate or rely on training knowledge.
-4. ACKNOWLEDGE conflicts and dissent explicitly. If two records disagree on the same fact, surface BOTH perspectives in your answer with both citations. Do not silently pick one side.
-5. Be concise but complete. Use markdown formatting (lists, bold) where natural. 200-400 words is typical.
-6. Compute a confidence score (0.0 to 1.0) based on: source quality, source agreement, breadth of evidence.
+3. If the records cannot support an answer, say "I don't have data on this in my memory" — do NOT speculate or rely on training knowledge.
+4. ACKNOWLEDGE conflicts. If records disagree, surface BOTH perspectives with both citations. Never silently pick a side.
+5. Compute a confidence score (0.0 to 1.0) based on source quality, agreement, and breadth.
 
-OUTPUT FORMAT (very important — must be exact):
+OUTPUT FORMAT — must be exact, no preamble, no thinking out loud, no "let me look through the records":
 
-Write the markdown answer first, with inline [r:ID] citations after each factual claim.
-Then on a NEW LINE, write the literal string: {SYNTHESIS_DELIMITER}
-Then on the LAST LINE, write only the confidence as a decimal between 0 and 1 (e.g. 0.72).
+Line 1: A bold one-sentence VERDICT that directly answers the question. State the conclusion (good/bad/winner/tie/unclear) up front, with the key citation. This is the answer the user reads first.
 
-Do NOT wrap the answer in JSON, code fences, or any preamble. Just markdown → delimiter → number.
+Then a blank line.
+
+Then a short **Why:** section — 2-4 bullets with the supporting evidence and citations.
+
+Then, only if records disagree, a **Caveat:** section — 1-3 bullets with the conflicting evidence and what it implies.
+
+Total length: 120-220 words. Tight, factual, no hedging language ("it seems", "perhaps").
+
+Then on a NEW LINE: {SYNTHESIS_DELIMITER}
+Then on the LAST LINE: confidence as a decimal between 0 and 1 (e.g. 0.72).
+
+EXAMPLE for the question "How does Opus 4.7 do on SWE-bench?":
+
+**Opus 4.7's real-world SWE-bench score is contested: vendor claims 81%, independent re-runs land near 76% [r:abc-123] [r:def-456].**
+
+**Why:**
+- Anthropic's launch post reports 81% on SWE-bench Verified [r:abc-123].
+- An HN re-run by @kapil_v on the same 500-problem subset got 76%, suspecting eval contamination [r:def-456].
+- Excluding the suspect problems dropped the score to 73% [r:def-456].
+
+**Caveat:**
+- Vellum's leaderboard shows 87.6% [r:ghi-789], but methodology isn't disclosed — likely a different scaffold.
+
+{SYNTHESIS_DELIMITER}
+0.65
 """
     user_prompt = f"User question: {query}\n\n---\n\n{records_text}"
     return system_prompt, user_prompt
@@ -1702,23 +1746,16 @@ def page_query():
         submit = True
 
     if submit and query.strip():
-        models = list_models()
         st.session_state["raju_thinking"] = True
 
         try:
             with st.status("Raju is thinking…", expanded=True) as status:
-                # Stage 1: intent
-                status.update(label="Reading your question carefully…")
-                try:
-                    intent = llm_extract_query_intent(query, models)
-                except Exception as e:
-                    status.update(label=f"Intent extraction failed: {type(e).__name__}", state="error")
-                    st.error(f"{type(e).__name__}: {e}")
-                    st.session_state["raju_thinking"] = False
-                    return
-
-                # Stage 2: retrieval
+                # Single retrieval pass — broad fetch, let the synthesis LLM filter via reasoning.
+                # (Skipped the separate intent-extraction LLM call: it added 1-3s of latency and a
+                # failure point; the synthesis prompt receives all records and reasons about
+                # relevance directly. Cleaner and faster.)
                 status.update(label="Pulling relevant records from memory…")
+                intent: dict = {}
                 records = retrieve_for_query(intent)
                 n_b = len(records["benchmarks"])
                 n_o = len(records["opinions"])
@@ -1805,30 +1842,55 @@ def page_query():
         for k in ("_synth_final_answer", "_synth_confidence", "_synth_model_used"):
             st.session_state.pop(k, None)
 
-        # ---- Chat bubble container ----
-        bubble = st.container()
-        with bubble:
-            st.markdown(
-                """<div class="raju-bubble">
-                <div class="raju-bubble-header">
-                  <span class="raju-bubble-avatar">◆</span>
-                  <span class="raju-bubble-name">Raju</span>
-                  <span class="raju-bubble-meta">DeepSeek V4 Flash · grounded by contract · streaming live</span>
-                </div>
-                </div>""",
+        # ---- Chat bubble (verdict-first answer) ----
+        bubble_html_open = (
+            '<div class="raju-bubble">'
+            '<div class="raju-bubble-header">'
+            '<span class="raju-bubble-avatar">◆</span>'
+            '<span class="raju-bubble-name">Raju</span>'
+            f'<span class="raju-bubble-meta">{MODEL_HIGH_STAKES.split("/")[-1]} · grounded by contract</span>'
+            '</div>'
+            '<div class="raju-answer">'
+        )
+        bubble_html_close = '</div></div>'
+
+        synthesis_failed = False
+        bubble_slot = st.empty()
+        bubble_slot.markdown(
+            bubble_html_open
+            + '<p style="opacity:0.55; font-style: italic;">'
+              'Cross-checking sources. Refusing to make stuff up…</p>'
+            + bubble_html_close,
+            unsafe_allow_html=True,
+        )
+
+        try:
+            stream = llm_synthesize_grounded_answer_streaming(
+                query, records, model=MODEL_HIGH_STAKES
+            )
+            accumulated = ""
+            last_render = 0.0
+            for piece in stream:
+                accumulated += piece
+                # Throttle re-renders to ~10/sec so markdown parsing doesn't choke the stream
+                now = time.time()
+                if now - last_render >= 0.1:
+                    bubble_slot.markdown(
+                        bubble_html_open + _MD.render(accumulated) + bubble_html_close,
+                        unsafe_allow_html=True,
+                    )
+                    last_render = now
+            # Final render of full accumulated text
+            bubble_slot.markdown(
+                bubble_html_open + _MD.render(accumulated) + bubble_html_close,
                 unsafe_allow_html=True,
             )
-
-            synthesis_failed = False
-            with st.spinner("Cross-checking sources. Refusing to make stuff up. Citations incoming…"):
-                try:
-                    stream = llm_synthesize_grounded_answer_streaming(query, records, model=MODEL_CHEAP)
-                    st.write_stream(stream)
-                except Exception as e:
-                    synthesis_failed = True
-                    st.error(f"Synthesis failed: {type(e).__name__}: {e}")
-                finally:
-                    st.session_state["raju_thinking"] = False
+        except Exception as e:
+            synthesis_failed = True
+            bubble_slot.empty()
+            st.error(f"Synthesis failed: {type(e).__name__}: {e}")
+        finally:
+            st.session_state["raju_thinking"] = False
 
         if synthesis_failed:
             return
@@ -1839,34 +1901,36 @@ def page_query():
 
         cited_ids = list(set(re.findall(r"\[r:([a-f0-9-]+)\]", final_answer)))
 
+        # Re-render the bubble: render markdown to HTML, then swap [r:ID] markers for clickable citation chips
+        if final_answer:
+            html_body = _MD.render(final_answer)
+            html_body_with_chips = render_with_citation_chips(html_body, records)
+            bubble_slot.markdown(
+                bubble_html_open + html_body_with_chips + bubble_html_close,
+                unsafe_allow_html=True,
+            )
+
         try:
             synth_id = save_synthesis(query, final_answer, cited_ids, confidence)
         except Exception:
             synth_id = None
 
-        # ---- Confidence badge + citation chips render ----
-        # The streamed text shows raw [r:ID] markers. Render the polished version with chips below.
+        # ---- Confidence badge below the bubble ----
         conf_label = "HIGH" if confidence >= 0.75 else "MEDIUM" if confidence >= 0.5 else "LOW"
         conf_color = "#22c55e" if confidence >= 0.75 else "#f59e0b" if confidence >= 0.5 else "#ef4444"
+        model_label = MODEL_HIGH_STAKES.split("/")[-1]
 
-        st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(
-            f"<div style='display:flex; gap:10px; align-items:center; margin-bottom: 10px; flex-wrap: wrap;'>"
+            f"<div style='display:flex; gap:10px; align-items:center; margin: -8px 0 16px 0; flex-wrap: wrap;'>"
             f"<span style='background:{conf_color}1a; color:{conf_color}; "
             f"border:1px solid {conf_color}66; padding: 3px 12px; border-radius: 999px; "
             f"font-size: 0.82em; font-weight: 700;'>Confidence: {conf_label} ({confidence:.2f})</span>"
             f"<span style='opacity: 0.55; font-size: 0.82em;'>"
             f"{len(cited_ids)} citation{'s' if len(cited_ids) != 1 else ''} · "
-            f"answered by DeepSeek V4 Flash · grounded in {n_b + n_o} record(s)</span>"
+            f"answered by {model_label} · grounded in {n_b + n_o} record(s)</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
-
-        with st.expander("Polished render with clickable citation chips"):
-            rendered = render_with_citation_chips(final_answer, records)
-            st.markdown(rendered, unsafe_allow_html=True)
-            if synth_id:
-                st.caption(f"Synthesis saved as `{synth_id}`. Click any chip to open its source.")
 
     # ---- Comparison charts always visible below query/answer ----
     render_comparison_charts()
@@ -1980,32 +2044,19 @@ def render_comparison_charts():
     )
 
 
-# ---------- Main app ----------
-st.sidebar.markdown(
-    "<div style='font-size:1.4em; font-weight:800; letter-spacing:-0.02em; "
-    "margin-bottom:4px;'>"
-    "<span style='color:#38bdf8;'>◆</span> Ask Raju"
-    "</div>",
-    unsafe_allow_html=True,
-)
-st.sidebar.caption("your AI-model knowledge memory")
+# ---------- Main app routing ----------
+# Sidebar is hidden via global CSS. Navigation lives inside render_nav() at the
+# top of each page (chip-style row in the brand bar area).
+NAV_OPTIONS = ["Query", "Browse", "Capture", "Home"]
+current_page = st.session_state.pop("nav", "Query")  # Query is the default landing
+if current_page not in NAV_OPTIONS:
+    current_page = "Query"
 
-NAV_OPTIONS = ["Home", "Capture", "Browse", "Query"]
-default_nav = st.session_state.pop("nav", "Home")
-default_idx = NAV_OPTIONS.index(default_nav) if default_nav in NAV_OPTIONS else 0
-page = st.sidebar.radio("Navigate", NAV_OPTIONS, index=default_idx, label_visibility="collapsed")
-
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    "Hackathon build · single-file Streamlit · "
-    "DeepSeek V4 (NVIDIA NIM) + Supabase · grounded by default"
-)
-
-if page == "Home":
-    page_home()
-elif page == "Capture":
-    page_capture()
-elif page == "Browse":
-    page_browse()
-elif page == "Query":
+if current_page == "Query":
     page_query()
+elif current_page == "Browse":
+    page_browse()
+elif current_page == "Capture":
+    page_capture()
+elif current_page == "Home":
+    page_home()
