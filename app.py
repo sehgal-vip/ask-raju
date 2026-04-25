@@ -23,6 +23,8 @@ from supabase import Client, create_client
 
 _MD = MarkdownIt("commonmark", {"breaks": True, "html": False})
 
+
+
 # ---------- Page config ----------
 st.set_page_config(page_title="Ask Raju", page_icon="◆", layout="wide")
 
@@ -120,13 +122,22 @@ def inject_global_css():
         .raju-logo--pulsing { animation: raju-pulse 1.4s ease-in-out infinite; }
         @keyframes raju-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
         .raju-wordmark { font-weight: 800; font-size: 1.15em; letter-spacing: -0.02em; color: #f8fafc; }
-        .raju-stats {
-          display: flex; gap: 12px; font-size: 0.85em; color: #cbd5e1;
-          margin-left: auto; align-items: center; flex-wrap: wrap;
+
+        /* Nav chips inside the brand bar */
+        .raju-nav { display: flex; gap: 8px; margin-left: auto; align-items: center; flex-wrap: wrap; }
+        .raju-nav a {
+          display: inline-flex; align-items: center; gap: 6px;
+          padding: 6px 14px; border-radius: 999px;
+          color: #cbd5e1; background: rgba(255,255,255,0.04);
+          border: 1px solid rgba(255,255,255,0.08);
+          font-size: 0.88em; font-weight: 600; text-decoration: none;
+          transition: all 0.12s ease;
         }
-        .raju-stats b { color: #f8fafc; font-weight: 700; }
-        .raju-dot { opacity: 0.35; }
-        .raju-conflict b { color: #fb7185; }
+        .raju-nav a:hover { background: rgba(255,255,255,0.10); color: #f8fafc; }
+        .raju-nav a.is-current {
+          background: #2563eb; color: white; border-color: #2563eb;
+        }
+        .raju-nav-icon { font-size: 0.95em; line-height: 1; opacity: 0.9; }
 
         /* ------- Hero ------- */
         .raju-hero {
@@ -270,10 +281,19 @@ def get_memory_stats() -> dict:
     }
 
 
-def render_brand_bar():
-    """Render the slim brand bar with logo, stats. Horizontal nav rendered separately below."""
-    s = get_memory_stats()
+NAV_ITEMS = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Home", "✦")]
+
+
+def render_brand_bar(current_page: str = ""):
+    """Render the slim brand bar with logo and inline nav chips.
+    Nav clicks set ?nav=X query param; the top-level dispatcher reads it."""
     pulsing = " raju-logo--pulsing" if st.session_state.get("raju_thinking") else ""
+    nav_chips = "".join(
+        f'<a href="?nav={name}" target="_self" '
+        f'class="{"is-current" if name == current_page else ""}">'
+        f'<span class="raju-nav-icon">{icon}</span>{name}</a>'
+        for name, icon in NAV_ITEMS
+    )
     st.markdown(
         f"""
         <div class="raju-brandbar">
@@ -281,39 +301,11 @@ def render_brand_bar():
             <span class="raju-logo{pulsing}">◆</span>
             <span class="raju-wordmark">Ask Raju</span>
           </div>
-          <div class="raju-stats">
-            <span><b>{s['models']}</b> models</span>
-            <span class="raju-dot">·</span>
-            <span><b>{s['benchmarks']}</b> benchmarks</span>
-            <span class="raju-dot">·</span>
-            <span><b>{s['opinions']}</b> opinions</span>
-            <span class="raju-dot">·</span>
-            <span class="raju-conflict"><b>{s['conflicts']}</b> conflicts</span>
-          </div>
+          <nav class="raju-nav">{nav_chips}</nav>
         </div>
         """,
         unsafe_allow_html=True,
     )
-
-
-def render_nav(current_page: str):
-    """Render horizontal chip-style nav. Call once after brand bar."""
-    NAV = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Home", "✦")]
-    cols = st.columns([1, 1, 1, 1, 6])  # nav buttons + spacer
-    for i, (name, icon) in enumerate(NAV):
-        with cols[i]:
-            is_current = name == current_page
-            if is_current:
-                st.markdown(
-                    f"<div style='padding: 6px 14px; background: #2563eb; color: white; "
-                    f"border-radius: 999px; font-weight: 600; font-size: 0.9em; "
-                    f"text-align: center; margin: 2px 0;'>{icon} {name}</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                if st.button(f"{icon} {name}", key=f"nav_{name}", use_container_width=True):
-                    st.session_state["nav"] = name
-                    st.rerun()
 
 
 # ---------- LLM model IDs ----------
@@ -643,8 +635,7 @@ def upload_opinion_file(model_name: str, opinion: dict, model_id: str) -> tuple[
 
 # ---------- Pages ----------
 def page_home():
-    render_brand_bar()
-    render_nav("Home")
+    render_brand_bar("Home")
     s = get_memory_stats()
 
     st.markdown(
@@ -791,8 +782,7 @@ def _render_benchmarks_list(benchmarks: list[dict]) -> str:
 
 
 def page_capture():
-    render_brand_bar()
-    render_nav("Capture")
+    render_brand_bar("Capture")
     st.markdown(
         """
         <div class="raju-page-hero">
@@ -1030,8 +1020,7 @@ def styled_card(title: str, body_html: str, accent_color: str = "#64748b", icon:
 
 
 def page_browse():
-    render_brand_bar()
-    render_nav("Browse")
+    render_brand_bar("Browse")
     st.markdown(
         """
         <div class="raju-page-hero">
@@ -1459,6 +1448,8 @@ def retrieve_for_query(intent: dict) -> dict:
 
 
 SYNTHESIS_DELIMITER = "---CONFIDENCE---"
+ANSWER_START = "===ANSWER==="
+ANSWER_END = "===END==="
 
 
 def _build_synthesis_prompts(query: str, records: dict) -> tuple[str, str]:
@@ -1493,32 +1484,59 @@ def _build_synthesis_prompts(query: str, records: dict) -> tuple[str, str]:
 4. ACKNOWLEDGE conflicts. If records disagree, surface BOTH perspectives with both citations. Never silently pick a side.
 5. Compute a confidence score (0.0 to 1.0) based on source quality, agreement, and breadth.
 
-OUTPUT FORMAT — must be exact, no preamble, no thinking out loud, no "let me look through the records":
+OUTPUT FORMAT — must be exact. The very FIRST CHARACTER of your output must be `*` (an asterisk for bold). Anything else is a violation.
 
-Line 1: A bold one-sentence VERDICT that directly answers the question. State the conclusion (good/bad/winner/tie/unclear) up front, with the key citation. This is the answer the user reads first.
+DO NOT include any of these in your output:
+- Numbered analysis steps ("1. Analyze the request", "2. Scan records", "3. Synthesize", "4. Draft the verdict", etc.)
+- Section headers like "ANALYZE", "SCAN RECORDS", "SYNTHESIZE", "DRAFT"
+- Phrases like "Looking through the records", "The user is asking", "I need to look", "Let me check", "I should", "Note:", "(Note:"
+- Any meta-commentary about the format, the records, or your own process
 
-Then a blank line.
+You may think and draft freely BEFORE the answer block — that's invisible to the user. The user only sees what's between the {ANSWER_START} and {ANSWER_END} markers. Anything outside those markers is discarded.
 
-Then a short **Why:** section — 2-4 bullets with the supporting evidence and citations.
+You MUST wrap your final answer in these exact markers, on their own lines:
 
-Then, only if records disagree, a **Caveat:** section — 1-3 bullets with the conflicting evidence and what it implies.
+{ANSWER_START}
+(the polished answer goes here — see PART 1 + PART 2 below)
+{ANSWER_END}
 
-Total length: 120-220 words. Tight, factual, no hedging language ("it seems", "perhaps").
+PART 1 — THE ANSWER (always first inside {ANSWER_START}, always bold):
+- One polished, human paragraph wrapped entirely in `**...**` (bold).
+- 2-4 sentences (40-80 words). Reads like a sharp friend explaining over coffee, not a report.
+- Lead with the actual answer the user wants (good/bad/winner/tie/unclear) in plain language.
+- Sound human: contractions are fine ("it's", "doesn't"). Active voice. No hedging ("it seems", "perhaps", "may"). No bureaucratese ("the data suggests", "based on the records").
+- Cite key claims inline with [r:ID].
+- This paragraph alone should give a complete, useful answer if the user reads nothing else.
+
+Then a blank line. Then PART 2 — THE BREAKDOWN:
+
+**Why:**
+- 2-4 bullets with supporting evidence and citations.
+
+(Optional, only if records disagree)
+**Caveat:**
+- 1-3 bullets with the conflicting evidence and what it implies.
+
+Total length: 140-240 words. Tight, factual, no hedging.
 
 Then on a NEW LINE: {SYNTHESIS_DELIMITER}
 Then on the LAST LINE: confidence as a decimal between 0 and 1 (e.g. 0.72).
 
-EXAMPLE for the question "How does Opus 4.7 do on SWE-bench?":
+EXAMPLE for "How does Opus 4.7 actually perform on SWE-bench?":
 
-**Opus 4.7's real-world SWE-bench score is contested: vendor claims 81%, independent re-runs land near 76% [r:abc-123] [r:def-456].**
+(your reasoning happens here — totally optional, totally invisible)
+
+{ANSWER_START}
+**Opus 4.7's real SWE-bench score is contested. Anthropic ships it at 81% [r:abc-123], but an independent re-run on the same 500-problem subset got 76% and flagged possible eval contamination [r:def-456]. So the honest answer is "somewhere in the high 70s" — closer to the practitioner number than the vendor's headline. If you're picking it for code work, treat 76% as the floor.**
 
 **Why:**
 - Anthropic's launch post reports 81% on SWE-bench Verified [r:abc-123].
-- An HN re-run by @kapil_v on the same 500-problem subset got 76%, suspecting eval contamination [r:def-456].
+- An HN re-run by @kapil_v on the same subset got 76%, suspecting contamination [r:def-456].
 - Excluding the suspect problems dropped the score to 73% [r:def-456].
 
 **Caveat:**
 - Vellum's leaderboard shows 87.6% [r:ghi-789], but methodology isn't disclosed — likely a different scaffold.
+{ANSWER_END}
 
 {SYNTHESIS_DELIMITER}
 0.65
@@ -1556,15 +1574,19 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
         extra_body={"chat_template_kwargs": {"thinking": False}},
     )
 
-    accumulated = ""
-    delimiter_seen = False
-    after_delimiter = ""
+    # Three-state machine:
+    #   REASONING — buffering, yielding nothing (the model's scratchpad is invisible)
+    #   ANSWERING — between ===ANSWER=== and ===END===, yielding chunks to the bubble
+    #   DONE      — after ===END===, capturing tail for confidence parsing
+    full = ""               # raw model output, for fallback parsing
+    answer_buf = ""         # the user-visible answer (between markers)
+    state = "REASONING"
+    yielded_len = 0         # how much of answer_buf we've already yielded
 
     for chunk in stream:
         if not getattr(chunk, "choices", None):
             continue
         delta = chunk.choices[0].delta
-        # Try content first; fall back to reasoning_content if model dumps there
         piece = getattr(delta, "content", None) or ""
         if not piece:
             piece = (
@@ -1574,38 +1596,48 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
             )
         if not piece:
             continue
-        accumulated += piece
-        if not delimiter_seen:
-            if SYNTHESIS_DELIMITER in accumulated:
-                idx = accumulated.find(SYNTHESIS_DELIMITER)
-                already_yielded_len = len(accumulated) - len(piece)
-                answer_part = accumulated[already_yielded_len:idx]
-                if answer_part:
-                    yield answer_part
-                delimiter_seen = True
-                after_delimiter = accumulated[idx + len(SYNTHESIS_DELIMITER):]
+        full += piece
+
+        if state == "REASONING":
+            if ANSWER_START in full:
+                idx = full.find(ANSWER_START) + len(ANSWER_START)
+                answer_buf = full[idx:].lstrip("\n")
+                state = "ANSWERING"
             else:
-                yield piece
-        else:
-            after_delimiter += piece
+                continue
 
-    # Parse confidence after stream completes
-    conf_text = after_delimiter.strip().split("\n")[-1].strip() if after_delimiter else "0.5"
-    try:
-        m = re.search(r"(\d+(?:\.\d+)?)", conf_text)
-        confidence = float(m.group(1)) if m else 0.5
-        if confidence > 1.0:
-            confidence = confidence / 100.0
-    except (ValueError, AttributeError):
-        confidence = 0.5
+        if state == "ANSWERING":
+            # Recompute answer_buf from full to handle the boundary chunk cleanly
+            ans_idx = full.find(ANSWER_START) + len(ANSWER_START)
+            tail = full[ans_idx:]
+            if ANSWER_END in tail:
+                end_idx = tail.find(ANSWER_END)
+                answer_buf = tail[:end_idx].rstrip()
+                state = "DONE"
+            else:
+                answer_buf = tail.lstrip("\n")
+            # Yield only the new portion
+            if len(answer_buf) > yielded_len:
+                yield answer_buf[yielded_len:]
+                yielded_len = len(answer_buf)
 
-    if delimiter_seen:
-        final_answer = accumulated[: accumulated.find(SYNTHESIS_DELIMITER)].rstrip()
-    else:
-        final_answer = accumulated.rstrip()
+    # Parse confidence from after the SYNTHESIS_DELIMITER in the raw output
+    confidence = 0.5
+    if SYNTHESIS_DELIMITER in full:
+        tail = full.split(SYNTHESIS_DELIMITER, 1)[1].strip().split("\n")[-1].strip()
+        m = re.search(r"(\d+(?:\.\d+)?)", tail)
+        if m:
+            try:
+                confidence = float(m.group(1))
+                if confidence > 1.0:
+                    confidence /= 100.0
+            except ValueError:
+                pass
 
-    # If the streamed answer is empty (rare edge case — model returned nothing),
-    # fall back to a non-streaming call as a last resort
+    final_answer = answer_buf.rstrip()
+
+    # Fallback: if the streamed answer is empty (model didn't emit markers, or
+    # streaming dropped), do a non-streaming retry and extract the answer block.
     if not final_answer:
         try:
             non_stream = nv.chat.completions.create(
@@ -1618,17 +1650,27 @@ def llm_synthesize_grounded_answer_streaming(query: str, records: dict, model: s
                 max_tokens=2048,
                 extra_body={"chat_template_kwargs": {"thinking": False}},
             )
-            full = non_stream.choices[0].message.content or ""
-            if SYNTHESIS_DELIMITER in full:
-                final_answer = full[: full.find(SYNTHESIS_DELIMITER)].rstrip()
-                tail = full[full.find(SYNTHESIS_DELIMITER) + len(SYNTHESIS_DELIMITER):].strip()
+            full2 = non_stream.choices[0].message.content or ""
+            # Try marker extraction first
+            if ANSWER_START in full2 and ANSWER_END in full2:
+                start = full2.find(ANSWER_START) + len(ANSWER_START)
+                end = full2.find(ANSWER_END)
+                final_answer = full2[start:end].strip()
+            elif SYNTHESIS_DELIMITER in full2:
+                final_answer = full2[: full2.find(SYNTHESIS_DELIMITER)].rstrip()
+            else:
+                final_answer = full2.rstrip()
+            # Confidence from the same retry
+            if SYNTHESIS_DELIMITER in full2:
+                tail = full2.split(SYNTHESIS_DELIMITER, 1)[1].strip().split("\n")[-1].strip()
                 m = re.search(r"(\d+(?:\.\d+)?)", tail)
                 if m:
-                    confidence = float(m.group(1))
-                    if confidence > 1.0:
-                        confidence /= 100.0
-            else:
-                final_answer = full.rstrip()
+                    try:
+                        confidence = float(m.group(1))
+                        if confidence > 1.0:
+                            confidence /= 100.0
+                    except ValueError:
+                        pass
             if final_answer:
                 yield final_answer
         except Exception:
@@ -1690,8 +1732,7 @@ def render_with_citation_chips(answer_md: str, records: dict) -> str:
 
 
 def page_query():
-    render_brand_bar()
-    render_nav("Query")
+    render_brand_bar("Query")
 
     # Hero
     st.markdown(
@@ -1880,7 +1921,7 @@ def page_query():
                         unsafe_allow_html=True,
                     )
                     last_render = now
-            # Final render of full accumulated text
+            # Final render of the accumulated answer
             bubble_slot.markdown(
                 bubble_html_open + _MD.render(accumulated) + bubble_html_close,
                 unsafe_allow_html=True,
@@ -2045,12 +2086,17 @@ def render_comparison_charts():
 
 
 # ---------- Main app routing ----------
-# Sidebar is hidden via global CSS. Navigation lives inside render_nav() at the
-# top of each page (chip-style row in the brand bar area).
+# Sidebar is hidden via global CSS. Nav lives in the brand bar (chip-style anchors
+# routed via ?nav=X query params), plus internal redirects via session_state["nav"].
 NAV_OPTIONS = ["Query", "Browse", "Capture", "Home"]
-current_page = st.session_state.pop("nav", "Query")  # Query is the default landing
+qp_nav = st.query_params.get("nav")
+ss_nav = st.session_state.pop("nav", None)
+current_page = ss_nav or qp_nav or "Query"
 if current_page not in NAV_OPTIONS:
     current_page = "Query"
+# Mirror to query params so reloads stay on the same page
+if qp_nav != current_page:
+    st.query_params["nav"] = current_page
 
 if current_page == "Query":
     page_query()
