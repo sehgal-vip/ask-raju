@@ -15,7 +15,7 @@ I have been refining a real protocol for agentic memory (`spec_v0.md`) and a rea
 
 It's also a stress test for me: can the spec produce a working prototype quickly when handed to Claude Code, or did I over-design? If the spec is right, this should be straightforward. If it's wrong, the friction will surface in the next 3 hours and I'll learn what to fix.
 
-The hackathon win is secondary. The real win is: **I leave with a working tool I can show on LinkedIn this week and a stronger conviction that the spec is right.**
+The hackathon win is secondary. The real win is: **I leave with a working tool and a stronger conviction that the spec is right.**
 
 ---
 

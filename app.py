@@ -107,15 +107,48 @@ def inject_global_css():
           background: white !important;
         }
 
-        /* ------- Brand bar (slim, horizontal nav inside) ------- */
-        .raju-brandbar {
-          display: flex; justify-content: space-between; align-items: center;
-          padding: 12px 22px; margin: 0 0 28px 0;
+        /* ------- Brand bar -------
+           The brand bar is a Streamlit horizontal block (st.columns) styled
+           via CSS. We use a marker div (.raju-brandbar-anchor) right before
+           the columns block, then target its next sibling. */
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] {
           background: #0f172a;
-          color: #e2e8f0;
+          padding: 10px 18px;
+          margin: 0 0 28px 0;
           border-radius: 0 0 14px 14px;
-          font-family: 'Inter', sans-serif;
-          gap: 16px; flex-wrap: wrap;
+          align-items: center;
+        }
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] [data-testid="stMarkdownContainer"] {
+          color: #e2e8f0;
+        }
+        /* Style the nav buttons inside the brand bar to look like dark chips */
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button {
+          background: rgba(255,255,255,0.04) !important;
+          color: #cbd5e1 !important;
+          border: 1px solid rgba(255,255,255,0.08) !important;
+          border-radius: 999px !important;
+          font-size: 0.86em !important;
+          font-weight: 600 !important;
+          padding: 4px 12px !important;
+          min-height: 32px !important;
+          height: auto !important;
+          box-shadow: none !important;
+          transition: all 0.12s ease;
+        }
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button:hover {
+          background: rgba(255,255,255,0.10) !important;
+          color: #f8fafc !important;
+          border-color: rgba(255,255,255,0.18) !important;
+        }
+        /* Streamlit "primary" type button = current page chip (filled blue) */
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button[kind="primary"] {
+          background: #2563eb !important;
+          color: white !important;
+          border-color: #2563eb !important;
+        }
+        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button[kind="primary"]:hover {
+          background: #1d4ed8 !important;
+          border-color: #1d4ed8 !important;
         }
         .raju-brand-row { display: flex; align-items: baseline; gap: 12px; flex-shrink: 0; }
         .raju-logo { color: #38bdf8; font-size: 1.45em; line-height: 1; }
@@ -348,27 +381,40 @@ NAV_ITEMS = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Ob
 
 
 def render_brand_bar(current_page: str = ""):
-    """Render the slim brand bar with logo and inline nav chips.
-    Nav clicks set ?nav=X query param; the top-level dispatcher reads it."""
+    """Render the brand bar: logo + wordmark on the left, nav buttons on the right.
+    Uses st.button for the nav (not anchor links) because Streamlit intercepts
+    internal <a href> clicks via History API and updates the URL without
+    rerunning the script — the URL flips but the page content stays. st.button
+    triggers a proper rerun via WebSocket, no full page reload, sub-100ms."""
     pulsing = " raju-logo--pulsing" if st.session_state.get("raju_thinking") else ""
-    nav_chips = "".join(
-        f'<a href="?nav={name}" target="_self" '
-        f'class="{"is-current" if name == current_page else ""}">'
-        f'<span class="raju-nav-icon">{icon}</span>{name}</a>'
-        for name, icon in NAV_ITEMS
-    )
-    st.markdown(
-        f"""
-        <div class="raju-brandbar">
-          <div class="raju-brand-row">
-            <span class="raju-logo{pulsing}">◆</span>
-            <span class="raju-wordmark">Ask Raju</span>
-          </div>
-          <nav class="raju-nav">{nav_chips}</nav>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+    # Marker div lets CSS target the immediately-following Streamlit horizontal
+    # block and apply the dark brand-bar background + spacing.
+    st.markdown('<div class="raju-brandbar-anchor"></div>', unsafe_allow_html=True)
+
+    # Logo column wider than each nav column
+    cols = st.columns([3] + [1] * len(NAV_ITEMS))
+
+    with cols[0]:
+        st.markdown(
+            f'<div class="raju-brand-row">'
+            f'<span class="raju-logo{pulsing}">◆</span>'
+            f'<span class="raju-wordmark">Ask Raju</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    for i, (name, icon) in enumerate(NAV_ITEMS):
+        with cols[i + 1]:
+            is_current = name == current_page
+            if st.button(
+                f"{icon} {name}",
+                key=f"navbtn_{name}",
+                use_container_width=True,
+                type="primary" if is_current else "secondary",
+            ):
+                st.query_params["nav"] = name
+                st.rerun()
 
 
 # ---------- LLM model IDs ----------
