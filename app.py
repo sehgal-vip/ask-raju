@@ -111,18 +111,18 @@ def inject_global_css():
            The brand bar is a Streamlit horizontal block (st.columns) styled
            via CSS. We use a marker div (.raju-brandbar-anchor) right before
            the columns block, then target its next sibling. */
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] {
+        .st-key-brandbar {
           background: #0f172a;
           padding: 10px 18px;
           margin: 0 0 28px 0;
           border-radius: 0 0 14px 14px;
           align-items: center;
         }
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] [data-testid="stMarkdownContainer"] {
+        .st-key-brandbar [data-testid="stMarkdownContainer"] {
           color: #e2e8f0;
         }
         /* Style the nav buttons inside the brand bar to look like dark chips */
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button {
+        .st-key-brandbar button {
           background: rgba(255,255,255,0.04) !important;
           color: #cbd5e1 !important;
           border: 1px solid rgba(255,255,255,0.08) !important;
@@ -135,18 +135,18 @@ def inject_global_css():
           box-shadow: none !important;
           transition: all 0.12s ease;
         }
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button:hover {
+        .st-key-brandbar button:hover {
           background: rgba(255,255,255,0.10) !important;
           color: #f8fafc !important;
           border-color: rgba(255,255,255,0.18) !important;
         }
         /* Streamlit "primary" type button = current page chip (filled blue) */
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button[kind="primary"] {
+        .st-key-brandbar button[kind="primary"] {
           background: #2563eb !important;
           color: white !important;
           border-color: #2563eb !important;
         }
-        .raju-brandbar-anchor + div [data-testid="stHorizontalBlock"] button[kind="primary"]:hover {
+        .st-key-brandbar button[kind="primary"]:hover {
           background: #1d4ed8 !important;
           border-color: #1d4ed8 !important;
         }
@@ -382,39 +382,37 @@ NAV_ITEMS = [("Query", "💬"), ("Browse", "🗂️"), ("Capture", "📥"), ("Ob
 
 def render_brand_bar(current_page: str = ""):
     """Render the brand bar: logo + wordmark on the left, nav buttons on the right.
-    Uses st.button for the nav (not anchor links) because Streamlit intercepts
-    internal <a href> clicks via History API and updates the URL without
-    rerunning the script — the URL flips but the page content stays. st.button
-    triggers a proper rerun via WebSocket, no full page reload, sub-100ms."""
+    Uses st.button (not anchor links) because Streamlit intercepts internal <a href>
+    clicks via History API — URL flips but the script never reruns. st.button uses
+    the WebSocket protocol, sub-100ms, no full page reload."""
     pulsing = " raju-logo--pulsing" if st.session_state.get("raju_thinking") else ""
 
-    # Marker div lets CSS target the immediately-following Streamlit horizontal
-    # block and apply the dark brand-bar background + spacing.
-    st.markdown('<div class="raju-brandbar-anchor"></div>', unsafe_allow_html=True)
+    # st.container(key=...) adds a stable .st-key-brandbar class to its DOM
+    # element. CSS targets that to apply the dark background and chip-button styling.
+    with st.container(key="brandbar"):
+        # Logo column narrower than nav so all 5 chips fit on one row
+        cols = st.columns([2] + [1] * len(NAV_ITEMS))
 
-    # Logo column wider than each nav column
-    cols = st.columns([3] + [1] * len(NAV_ITEMS))
+        with cols[0]:
+            st.markdown(
+                f'<div class="raju-brand-row">'
+                f'<span class="raju-logo{pulsing}">◆</span>'
+                f'<span class="raju-wordmark">Ask Raju</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
-    with cols[0]:
-        st.markdown(
-            f'<div class="raju-brand-row">'
-            f'<span class="raju-logo{pulsing}">◆</span>'
-            f'<span class="raju-wordmark">Ask Raju</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-    for i, (name, icon) in enumerate(NAV_ITEMS):
-        with cols[i + 1]:
-            is_current = name == current_page
-            if st.button(
-                f"{icon} {name}",
-                key=f"navbtn_{name}",
-                use_container_width=True,
-                type="primary" if is_current else "secondary",
-            ):
-                st.query_params["nav"] = name
-                st.rerun()
+        for i, (name, icon) in enumerate(NAV_ITEMS):
+            with cols[i + 1]:
+                is_current = name == current_page
+                if st.button(
+                    f"{icon} {name}",
+                    key=f"navbtn_{name}",
+                    use_container_width=True,
+                    type="primary" if is_current else "secondary",
+                ):
+                    st.query_params["nav"] = name
+                    st.rerun()
 
 
 # ---------- LLM model IDs ----------
